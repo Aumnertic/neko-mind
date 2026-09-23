@@ -24,3 +24,6 @@ target
 # Added by cargo
 
 /target
+
+# Local research notes and temporary conversations (do not upload)
+/tmp/
