@@ -1,13 +1,50 @@
-# 编排层原型设计计划
+# 编排与监控层原型设计计划
 
 日期：2026-09-23。状态：设计草案，尚未实施。整体边界见[架构讨论纪要](../architecture/overview.md)，模型调用契约见 [AI 请求层设计计划](ai-request-layer.md)。
 
 ## 已确定的方向
 
 - 先用 LangGraph 验证一轮文字对话的编排，重点是当前 Context 的构造、过往会话记忆导入和设定卡装配。
-- 用 Langfuse 观察图节点和模型调用；后续 Rust 实现沿用可迁移的追踪语义。
+- 在独立监控层使用 Langfuse 观察图节点和模型调用；后续 Rust 实现沿用可迁移的追踪语义。
 - AI 请求层由另一位协作者处理。编排层只依赖其统一请求与响应契约，不接管服务商适配。
 - 原型用于验证流程和数据边界，不表示 LangGraph 已成为 Rust 核心运行时的一部分。
+
+## 目录与文件建议
+
+以现有 `src/` 为源码根目录，并列规划编排与监控目录。Python 原型的依赖与 Rust 的 Cargo 依赖分别管理。下列文件拆分是候选，按实际复杂度合并小文件，不预建空模块。
+
+```text
+src/
+├── lib.rs                      # 现有 Rust crate 入口
+├── ai/                         # AI 请求层，见其独立计划
+├── orchestration/
+│   ├── graph.py                # 图节点、边与单轮入口
+│   ├── state.py                # 本轮图状态与快照标识
+│   ├── sources.py              # 设定卡、会话、候选记忆的读取边界
+│   ├── history_import.py       # 过往会话的批量导入与去重
+│   ├── context.py              # 冲突处理、预算选择与请求装配
+│   ├── request_bridge.py       # 统一请求层的薄适配边界
+│   ├── fixtures/               # 可提交的去标识化输入及预期结果
+│   └── tests/                  # 原型行为与接口契约验证
+└── monitoring/
+    ├── langfuse_adapter.py     # Langfuse 回调及模型调用观测
+    ├── trace_context.py        # 一轮执行的关联标识传递
+    └── privacy.py              # 上传字段筛选与脱敏策略
+```
+
+| 文件 | 主要职责与边界 |
+| --- | --- |
+| `graph.py` | 串起读取、装配、请求和结果阶段；业务取舍规则留在 `context.py`，不把图状态当持久记忆。 |
+| `state.py` | 描述本轮输入、快照版本、阶段产物和错误；只保存编排所需状态，不复制完整历史库。 |
+| `sources.py` | 提供设定卡版本、当前会话及候选记忆的读取入口；原型可先读样本，存储技术待定。 |
+| `history_import.py` | 归一化来源、角色、时间和顺序，处理重复导入；与每轮检索分开。 |
+| `context.py` | 装配设定卡、当前输入和记忆，记录冲突、预算占用及取舍原因，输出统一消息。 |
+| `request_bridge.py` | 对接协作者的 `send_messages` 契约；接口未就绪时用固定响应验证编排，不实现服务商协议。 |
+| `langfuse_adapter.py` | 在监控层接入 LangGraph 回调，并为统一请求调用补充观测；不改变业务结果。 |
+| `trace_context.py` | 传递会话、本轮、请求与 trace 标识，保证图节点和模型调用可关联。 |
+| `privacy.py` | 集中限制上传内容和敏感字段；真实数据接入前验证过滤效果。 |
+
+`context.py` 与导入逻辑不依赖 LangGraph 或 Langfuse，便于将来在 Rust 中重做业务规则。编排层只传递观测所需的阶段、版本和结果摘要，Langfuse 配置与上传策略归监控层。Rust 请求层的 `src/ai/` 目录仍按现有计划由协作者建设；Python 原型如何连接 Rust、迁移时如何调整两个新目录，等原型结论和接口契约明确后再定。私有样本放仓库根目录的 `tmp/`，可共享的去标识化样本才进入 `fixtures/`。
 
 ## 原型范围
 
@@ -44,11 +81,15 @@
 
 Context 构造先预留模型输出空间，再按预算选择角色设定、当前输入、当前会话与候选记忆。保留每个片段的来源、预算占用和纳入／舍弃原因。预算值与请求层模型配置保持一致；超额时明确缩减或报错，不静默截断关键设定。渲染后的统一请求是可检查的原型产物。
 
-### 状态、恢复与观测
+### 状态与恢复
 
 图状态只保存本轮执行所需的快照标识、阶段结果和错误；原始会话、长期记忆与设定卡由各自的数据源负责。LangGraph checkpoint 用于原型内的步骤恢复，不作为长期记忆库。首次原型可用临时 checkpoint；跨进程恢复、取消和重复提交在接入持久存储前再明确。
 
-一轮编排对应一个 Langfuse trace。节点分别记录读取、选择、装配、请求和结果的耗时、版本、数量及取舍摘要；模型调用记录可用的 token 用量和结束原因。原型只用去标识化样本；回调可能采集输入输出，接入真实数据前须验证脱敏和过滤配置，并决定原文采样与保留期限。密钥不得进入日志或 trace。观测上报失败不应改变本轮结果，但应可在本地诊断。
+### Langfuse 监控层
+
+一轮编排对应一个 Langfuse trace。监控层关联读取、选择、装配、请求和结果阶段，记录耗时、版本、数量及取舍摘要；模型调用记录可用的 token 用量和结束原因。LangGraph 回调可以记录图执行，但经 `request_bridge.py` 调用的统一请求层未必自动成为模型观测，需由监控层显式关联该调用与本轮 trace，并从统一响应读取用量和请求标识。
+
+原型只用去标识化样本；回调可能采集输入输出，接入真实数据前须验证脱敏和过滤配置，并决定原文采样与保留期限。密钥不得进入日志或 trace。观测上报失败不应改变本轮结果，但应可在本地诊断。
 
 Langfuse 官方提供 [LangGraph 回调集成](https://langfuse.com/integrations/frameworks/langgraph)；Python 原型可借此追踪图运行。Langfuse 也提供 [OpenTelemetry 接收端](https://langfuse.com/integrations/native/opentelemetry)，Rust 阶段可用 OpenTelemetry 输出 trace。此处的“兼容”指观测数据可接入，不承诺 LangGraph 图代码能直接迁入 Rust。LangGraph 的 [checkpoint 持久化](https://docs.langchain.com/oss/python/langgraph/persistence)与产品长期记忆应保持不同职责。
 
