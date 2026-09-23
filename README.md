@@ -21,6 +21,8 @@ neko-mind 是 AI 女友项目 **neko** 的独立核心仓库，围绕文字聊�
 
 - [架构讨论纪要](docs/architecture/overview.md)：定位、职责、行为连续性与待定事项。
 - [AI 请求层设计计划](docs/plans/ai-request-layer.md)：目录、协议、流式接口、适配器及验证。
+- [编排层原型设计计划](docs/plans/orchestration-layer.md)：LangGraph 原型、Context 装配、记忆导入与 Langfuse 观测。
+- [编排协作文档](docs/plans/orchestration-collaboration.md)：编排侧与 AI 请求侧的分工、接口交接和联调顺序。
 - [Agent 协作约定](AGENTS.md)：AI 辅助边界与文档规则。
 
 ## 贡献原则
